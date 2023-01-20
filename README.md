@@ -11,7 +11,9 @@ Can be used with standard Network UPS Tools (NUT) with a blazer_ser driver and M
 
 NOTE: I made only one pcb and the first version had an error. The error is corrected only in the schematic and v2 pcb image.
 
-Warning: Probably contains errors and bugs.
+### Warning:
+
+Probably contains errors and bugs.
 
 I'm not responsible of any possible damage caused by any content stored here.
 
