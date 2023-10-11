@@ -1,13 +1,8 @@
 /*
- * Name:		dc_ups.ino
- * Created:	2022-02-11
- * Author:	Isto Saarinen
- */
-
-
-
-
-
+ Name:		dc_ups.ino
+ Created:	2022-10-10
+ Author:	ISS
+*/
 
 
 
@@ -35,8 +30,8 @@
 	wbcm1440		set battery_max_charge_mins [minutes] = 24h   max charge time (0 ... 4320)
 	wbbm360			set battery_max_bad_mins [minutes] = 6h  max battery too low time (0 ... 1440)
 	wblm720			set battery_max_low_mins [minutes] = 12h max battery low time (0 ... 1440)
-	wbdt2022-01-10	set battery_date [yyyy-mm-dd]       battery change date (string, 10 chars)
-	wobm120         set on_battery_max_time_mins [minutes] = 2h  max run time on battery (0 ... 540)
+	wbdt2022-01-10		set battery_date [yyyy-mm-dd]       battery change date (string, 10 chars)
+	wobm120         	set on_battery_max_time_mins [minutes] = 2h  max run time on battery (0 ... 540)
 	wmoc4.0			set max_output_current [A]   max output current (1.0 ... 5.0)
  
 	wati1440		set auto_test_interval_mins [minutes] = 24h    automatic test interval (>= 0)
@@ -44,7 +39,7 @@
 	wtmi10			set measure_interval_secs [seconds]   temperature measure interval (0 ... 65535)
 	wthl30.0		set temperature_high_limit [C degrees]   temperature high limit (25.0 ... 60.0)
 
-	wfmi20			set fan_min_pwm [%]    fan min speed (0 ... 100)
+	wfmi40			set fan_min_pwm [%]    fan min speed (0 ... 100)
 	wfma80			set fan_max_pwm [%]    fan max speed (0 ... 100)
 
 	wdbg1			set debug_override [0 = normal, 1 = debug messages on]    debug messages
@@ -88,7 +83,7 @@ float    EEMEM ee_battery_bad_voltage 			= 10.5;			// Battery dead voltage (V)	[
 float    EEMEM ee_battery_max_capacity 			= 3.6;			// Max usable battery capacity (Ah)	[EEPROM]
 float    EEMEM ee_max_output_current 			= 4;			// Max output current (A)	[EEPROM]
 uint16_t EEMEM ee_auto_test_interval_mins 		= 1440;			// Automatic test (long) interval (minute)	[EEPROM]
-uint8_t  EEMEM ee_auto_test_duration_mins 		= 0;			// Automatic test duration (minute), 0 => 10 sek, 255 => akku tyhjäksi	[EEPROM]
+uint8_t  EEMEM ee_auto_test_duration_mins 		= 0;			// Automatic test duration (minute), 0 => 10 sek, 255 => akku tyhjÃ¤ksi	[EEPROM]
 uint16_t EEMEM ee_temp_measure_interval_secs 	= 10;			// Temperature measure interval (second)	[EEPROM]
 char     EEMEM ee_battery_date[11] 				= "2022-01-10";	// Battery install date (YYYY-MM-DD)	[EEPROM]
 float    EEMEM ee_input_voltage_adjust 			= 0.0;			// Adjustment multiplier	[EEPROM]
@@ -97,7 +92,7 @@ float    EEMEM ee_output_voltage_adjust 		= 0.0;			// Adjustment multiplier	[EEP
 float    EEMEM ee_charge_current_adjust 		= 0.0;			// Adjustment multiplier	[EEPROM]
 float    EEMEM ee_output_current_adjust 		= 0.0;			// Adjustment multiplier	[EEPROM]
 uint8_t  EEMEM ee_debug_override 				= 1;			// Force debug mode	[EEPROM]
-uint8_t  EEMEM ee_fan_min_pwm 					= 0;			// Fan min speed	[EEPROM]
+uint8_t  EEMEM ee_fan_min_pwm 					= 30;			// Fan min speed	[EEPROM]
 uint8_t  EEMEM ee_fan_max_pwm 					= 100;			// Fan max speed	[EEPROM]
 uint16_t EEMEM ee_battery_max_charge_mins		= 1440;			// Max charge duration (longer => battery dead)	[EEPROM]
 uint16_t EEMEM ee_battery_max_low_mins 			= 360;			// Max battery low duration (longer => battery dead)	[EEPROM]
@@ -146,7 +141,10 @@ uint8_t source_on        = 0;	// Utility on
 uint8_t charge_on        = 0;	// Charge on
 uint8_t battery_on       = 0;	// Battery on
 uint8_t output_on        = 0;	// Output on
-uint8_t fan_on           = 0;	// Fan on
+uint8_t fan_on           = 0;	// Fan output state
+uint8_t fan_on_test      = 0;	// Fan on during test
+uint8_t fan_on_charge    = 0;	// Fan on during charge
+uint8_t fan_on_temp      = 0;	// Fan on with temperature
 uint8_t battery_fail     = 0;	// Battery dead
 uint8_t utility_fail     = 0;	// Q1 status
 uint8_t battery_low      = 0;	// Q1 status
@@ -208,7 +206,7 @@ unsigned long last_battery_check_time   = 0;	// Last battery check timestamp
 // PB3 (D11)
 
 // PB2 (D10) => FAN PWR
-#define FAN_ON()		(PORTB |= (1 << PB2)); fan_on = 1
+#define FAN_ON()		(PORTB |= (1 << PB2));  fan_on = 1
 #define FAN_OFF()		(PORTB &= ~(1 << PB2)); fan_on = 0
 
 // PB1 (D9) => FAN PWM (OC1A)
@@ -262,19 +260,24 @@ void measure_temperature() {
 
 
 // Fan speed set %,  0 .. 100
-void set_fan_pwm(uint8_t percent) {
+
+uint8_t set_fan_pwm(uint8_t percent, uint8_t ident) {
 	if (percent < fan_min_pwm) {
 		percent = 0;
 	} else if (percent > fan_max_pwm) {
 		percent = fan_max_pwm;
 	}
-	fan_pwm = percent;
+	//fan_pwm = percent;
+	if (is_debug_mode > 0) {
+		Serial.print(F("f pwm ")); Serial.print(ident); Serial.print(F(" => ")); Serial.println(percent);
+	}
 	float v = ((float)FAN_PWM_TOP * ((float)percent / 100.0));
 	if (v > (float)FAN_PWM_TOP) {
 		v = FAN_PWM_TOP;
 	}
 	if (v < 0) v = 0;
 	OCR1A = (uint16_t)v;
+	return(percent);
 }
 
 
@@ -296,7 +299,6 @@ void measure_values() {
 void start_test() {
 	// 1. Charge off
 	CHARGE_OFF();
-
 	// 2. If battery is disconnected, connect
 	if (battery_on == 0) {
 		BATTERY_ON();
@@ -332,11 +334,13 @@ void start_test() {
 
 // Stop test
 void stop_test() {
-	TESTLOAD_OFF(); 
-	test_in_progress = 0; 
-	test_start_time = 0; 
-	FAN_OFF(); 
-	set_fan_pwm(0); 
+	TESTLOAD_OFF();
+	test_in_progress = 0;
+	test_start_time = 0;
+	if (fan_on_test > 0) {
+		fan_on_test = 0;
+		fan_pwm = set_fan_pwm(fan_min_pwm, 103);
+	}
 	CHARGE_ON();
 }
 
@@ -357,6 +361,11 @@ void do_shutdown() {
 	cancel_shutdown();
 	OUTPUT_OFF();
 	output_state = OUTPUT_STATE_OFF;
+	FAN_OFF();
+	fan_pwm = set_fan_pwm(fan_min_pwm, 200);
+	fan_on_test = 0;
+	fan_on_temp = 0;
+	fan_on_charge = 0;
 }
 
 // Output on
@@ -366,6 +375,11 @@ void do_startup() {
 	OUTPUT_ON();
 	output_state = OUTPUT_STATE_ON;
 	startup_start_time = 0;
+	fan_pwm = set_fan_pwm(fan_min_pwm, 201);
+	FAN_ON();
+	fan_on_test = 0;
+	fan_on_temp = 0;
+	fan_on_charge = 0;
 }
 
 
@@ -498,7 +512,7 @@ void setup() {
 	DDRB |= (1 << DDB2);
 	// PB1 (D9) => FAN PWM (OC1A)
 	DDRB |= (1 << DDB1);
-	// PB0 (D8) <= SETUP MODE INPUT, ylösveto
+	// PB0 (D8) <= SETUP MODE INPUT, ylÃ¶sveto
 	PORTB |= (1 << PB0);
 
 	// PD7 (D7)
@@ -517,7 +531,9 @@ void setup() {
 	TESTLOAD_OFF();
 	SOURCE_ON();
 	FAN_OFF();
-
+	fan_on_test = 0;
+	fan_on_temp = 0;
+	fan_on_charge = 0;
 
 	Serial.begin(2400);
 
@@ -600,10 +616,16 @@ void setup() {
 	TCCR1A = (1 << COM1A1) | (1 << COM1A0);	// Inverted pwm -> pull down driver 
 	TCCR1B = (1 << WGM13) | (1 << CS10);	// Phase and frequency correct PWM, mode 8
 
-	// Fan off
-	set_fan_pwm(0);
+	fan_pwm = set_fan_pwm(fan_min_pwm, 100);
 
 	if (is_debug_mode > 0) {
+		Serial.println(F("---"));
+		print_settings();
+		Serial.println(F("---"));
+		print_state();
+		Serial.println(F("---"));
+		print_values();
+		Serial.println(F("---"));
 		Serial.println(F("setup done"));
 	}
 }
@@ -627,12 +649,14 @@ void loop() {
 		is_debug_mode = 1;
 	}
 
-
 	// Measure
 	measure_values();
 
 	// Source
 	if (input_voltage < INPUT_VOLTAGE_LOW) {
+
+		// Input voltage low -> stop test, stop charge, start on battery timer
+
 		utility_fail = 1;
 		stop_test();	// For safety
 		CHARGE_OFF();
@@ -646,6 +670,9 @@ void loop() {
 			on_battery_time_mins = (millis() - on_battery_start_time) / 60000;
 		}
 	} else if (input_voltage >= INPUT_VOLTAGE_OK) {
+
+		// Input voltage ok -> clear on battery timer
+
 		if (utility_fail > 0) {
 			if (is_debug_mode > 0) {
 				Serial.println(F("VIN OK -> utl f = 0"));
@@ -715,6 +742,10 @@ void loop() {
 			// Voltage < bad => battery is dead if long enough time spent
 			if (test_in_progress > 0) {
 				// Too low during test -> battery dead & fail
+				if (fan_on_test > 0) {
+					fan_on_test = 0;
+					fan_pwm = set_fan_pwm(fan_min_pwm, 102);
+				}
 				stop_test();
 				CHARGE_OFF();
 				BATTERY_OFF();
@@ -801,7 +832,7 @@ void loop() {
 
 			}
 		} else {
-			// BAttery ok, restore
+			// Battery ok, restore
 			if (ups_fail == 1) {
 				ups_fail = 0;
 			}
@@ -825,18 +856,19 @@ void loop() {
 
 
 		// Charge
-		temp_double = battery_full_voltage;
 		if (utility_fail == 0) {
 			// Only if source ok
-
-			temp_double = battery_max_voltage;
 
 			// Only if not testing
 			if (test_in_progress == 0) {
 
 				// Charge check
 				// Charge start if current > 200mA
+
 				if (charge_current > CHARGE_CURRENT_START) {
+					FAN_ON();
+					t = millis() - battery_charge_start_time;
+
 					if (battery_charge_start_time == 0) {
 						battery_charge_start_time = millis();
 						if (is_debug_mode > 0) {
@@ -844,35 +876,36 @@ void loop() {
 						}
 					} else {
 
-						t = millis() - battery_charge_start_time;
+						//t = millis() - battery_charge_start_time;
 						battery_charge_time_mins = t / 60000UL;
 
-						if (t > CHARGE_TIME_START_FAN) {
+						// 5 sec fan full, after that adjust with charge current
+						//if ((millis() - battery_charge_start_time) > CHARGE_TIME_ADJUST_FAN) {
+						if (t > CHARGE_TIME_ADJUST_FAN) {
+							if (fan_on_charge == 1) {
+								uint8_t f = fan_min_pwm + (uint8_t)((charge_current / MAX_CHARGE_CURRENT) * (float)(fan_max_pwm - fan_min_pwm));
+								if (abs(f - fan_pwm) > 2) {
+									if (is_debug_mode > 0) {
+										Serial.print(F("B chg -> fan set ")); Serial.println(f);
+									}
+									fan_pwm = set_fan_pwm(f, 105);
+								}
+							}
+
+						} else if (t > CHARGE_TIME_START_FAN) {
 							// Charge duration > 30sec -> start fan
-							if (fan_on == 0) {
-								set_fan_pwm(fan_max_pwm);
-								FAN_ON();
+							if (fan_on_charge == 0) {
+								fan_on_charge = 1;
+								fan_pwm = set_fan_pwm(fan_max_pwm, 104);
 								if (is_debug_mode > 0) {
 									Serial.print(F("B chg >30sek -> fan start ")); Serial.println(fan_max_pwm);
 								}
 							}
+
 						}
 
 					}
-					// 5 sec fan full, after that adjust with charge current
-					if ((millis() - battery_charge_start_time) > CHARGE_TIME_ADJUST_FAN) {
 
-						if (fan_on == 1) {
-							uint8_t f = fan_min_pwm + (uint8_t)((charge_current / MAX_CHARGE_CURRENT) * (float)(fan_max_pwm - fan_min_pwm));
-							if (abs(f - fan_pwm) > 2) {
-								if (is_debug_mode > 0) {
-									Serial.print(F("B chg -> fan set ")); Serial.println(f);
-								}
-								set_fan_pwm(f);
-							}
-						}
-
-					}
 				}
 
 				// Charge end when current < 100mA
@@ -888,13 +921,14 @@ void loop() {
 					// Charge between 100mA ... 200mA -> stop fan when < 200mA
 					if (test_in_progress == 0) {
 						// Only if not testing (test controls the fan). Just to be sure
-						if ((fan_on == 1) && (temperature < temperature_high_limit)) {
-							set_fan_pwm(0);
-							FAN_OFF();
+						if (fan_on_charge == 1) {
+							fan_on_charge = 0;
+							fan_pwm = set_fan_pwm(fan_min_pwm, 106);
 							if (is_debug_mode > 0) {
-								Serial.println(F("B chg < 200 -> fan stop"));
+								Serial.println(F("B chg < 200 -> fan min"));
 							}
 						}
+
 					}
 				}
 
@@ -912,14 +946,15 @@ void loop() {
 					if (is_debug_mode > 0) {
 						Serial.println(F("B chg t -> b fail"));
 					}
-					// Stop fan
-					if (fan_on == 1) {
-						set_fan_pwm(0);
-						FAN_OFF();
+
+					if (fan_on_charge > 0) {
+						fan_on_charge = 0;
+						fan_pwm = set_fan_pwm(fan_min_pwm, 107);
 						if (is_debug_mode > 0) {
-							Serial.println(F("B chg t -> fan stop"));
+							Serial.println(F("B chg t -> fan min"));
 						}
 					}
+
 				}
 
 
@@ -951,16 +986,16 @@ void loop() {
 				t = millis() - test_start_time;
 
 				if (t > TEST_TIME_START_FAN) {
-					// Duration > 30 sec -> start fan 100%
-					if (fan_on == 0) {
+					FAN_ON();
+					if (fan_on_test < 1) {
 						if (fan_max_pwm != fan_pwm) {
-							set_fan_pwm(fan_max_pwm);
-						}
-						FAN_ON();
-						if (is_debug_mode > 0) {
-							Serial.print(F("test > 30sek -> fan start ")); Serial.println(fan_max_pwm);
+							fan_pwm = set_fan_pwm(fan_max_pwm, 108);
+							if (is_debug_mode > 0) {
+								Serial.print(F("test > 30sek -> fan start ")); Serial.println(fan_max_pwm);
+							}
 						}
 					}
+
 				}
 
 				// Test duration reached
@@ -970,13 +1005,16 @@ void loop() {
 					}
 					// Stop test & fan
 					stop_test();
-					if ((fan_on == 1) && (temperature < temperature_high_limit)) {
-						set_fan_pwm(0);
-						FAN_OFF();
+
+					if (fan_on_test > 0) {
+						fan_on_test = 0;
+						fan_pwm = set_fan_pwm(fan_min_pwm, 109);
 						if (is_debug_mode > 0) {
-							Serial.println(F("T time -> fan stop"));
+							Serial.println(F("T time -> fan min"));
 						}
+
 					}
+
 				}
 
 			}
@@ -990,9 +1028,15 @@ void loop() {
 		// NOTE: basic calculation based only on voltage.
 
 		// NOTE: calculate as multiplier 0.0 .. 1.0
-		if (battery_voltage < battery_low_voltage) {
-			battery_charge_percent = 0;
-		} else {
+		//if (battery_voltage < battery_low_voltage) {
+		//	battery_charge_percent = 0;
+		//} else {
+		//	temp_double = ((battery_voltage - battery_low_voltage) / (temp_double - battery_low_voltage));
+		//	if (temp_double > 1.0) temp_double = 1.0;
+		//}
+
+		temp_double = 0.0;
+		if (battery_voltage > battery_low_voltage) {
 			temp_double = ((battery_voltage - battery_low_voltage) / (temp_double - battery_low_voltage));
 			if (temp_double > 1.0) temp_double = 1.0;
 		}
@@ -1029,27 +1073,31 @@ void loop() {
 			Serial.print(F("temp = ")); Serial.println(temperature);
 		}
 
-		// 2.1. Only if not testing
-		if ((test_in_progress == 0)) {
+		// 2.1. Only if not testing or charging
+		//if ((test_in_progress == 0) && 
+		if ((fan_on_test < 1) && (fan_on_charge < 1)) {
 			if (temperature > temperature_high_limit) {
-				if (fan_on == 0) {
-					// 80% on range
+				FAN_ON();
+
+				if (fan_on_temp < 1) {
+					fan_on_temp = 1;
 					uint8_t f = fan_min_pwm + ((fan_max_pwm - fan_min_pwm) * 0.8);
-					set_fan_pwm(f);
-					FAN_ON();
+					fan_pwm = set_fan_pwm(f, 110);
 					if (is_debug_mode > 0) {
 						Serial.print(F("temp h -> fan start ")); Serial.println(f);
 					}
 				}
+
 			} else {
 				// On and charge in standby -> can stop
-				if ((fan_on == 1) && (charge_current < CHARGE_CURRENT_STOP_FAN)) {
-					set_fan_pwm(0);
-					FAN_OFF();
+				if (fan_on_temp > 0) {
+					fan_pwm = set_fan_pwm(fan_min_pwm, 111);
+					fan_on_temp = 0;
 					if (is_debug_mode > 0) {
-						Serial.println(F("temp l -> fan stop"));
+						Serial.println(F("temp l -> fan min"));
 					}
 				}
+
 			}
 		}
 	}
@@ -1061,9 +1109,13 @@ void loop() {
 
 	int bytes = Serial.available();
 	if (bytes > 0) {
-
+		//Serial.println("avail!");
 		memset(buf, 0, sizeof(buf));
 		uint8_t chars = Serial.readBytesUntil('\r', buf, sizeof(buf));
+		//Serial.print("chars = ");  Serial.println(chars);
+		if (is_debug_mode > 0) {
+			Serial.print(F("in buf = '"));  Serial.print(buf); Serial.println(F("'"));
+		}
 
 		/*
 		*	Megatec- protocol
@@ -1180,17 +1232,28 @@ void loop() {
 				if (chars == 1) {
 					// T	10 Seconds Test
 					test_run_time_secs = 10;
-				} else if ((buf[0] == 'L') && (chars == 2)) {
+					if (is_debug_mode > 0) {
+						Serial.print(F("T = ")); Serial.println(test_run_time_secs);
+					}
+				} else if ((buf[1] == 'L') && (chars == 2)) {
 					// TL	Test until Low Battery occurs
 					//test_until_low_battery = 1;
 					// Fake: test only 10 minutes
 					test_run_time_secs = 600;
-				} else if (chars == 3) {
+					if (is_debug_mode > 0) {
+						Serial.print(F("TL = ")); Serial.println(test_run_time_secs);
+					}
+				} else if (chars >= 3) {
 					// Tnn	Test for a Specified Time Period
 					temp_long = atol(buf + 1);
+
 					// Fake, max test time is 10 minutes, not 99
 					if ((temp_long > 0) && (temp_long <= 10)) {
-						test_run_time_secs = 60 * temp_long;
+						test_run_time_secs = 60 * (uint16_t)temp_long;
+					}
+
+					if (is_debug_mode > 0) {
+						Serial.print(F("T")); Serial.print(temp_long); Serial.print(" = "); Serial.println(test_run_time_secs);
 					}
 				}
 				if (is_debug_mode > 0) {
@@ -1458,6 +1521,9 @@ void loop() {
 				if ((temp_int >= 0) && (temp_int <= 100)) {
 					fan_min_pwm = temp_int;
 					eeprom_update_byte(&ee_fan_min_pwm, fan_min_pwm);
+					if (fan_pwm < fan_min_pwm) {
+						fan_pwm = set_fan_pwm(fan_min_pwm, 10);
+					}
 				}
 			} else if (strncmp(buf, "wfma", 4) == 0) {
 				// Fan max pwm
@@ -1468,6 +1534,9 @@ void loop() {
 				if ((temp_int >= 0) && (temp_int <= 100)) {
 					fan_max_pwm = temp_int;
 					eeprom_update_byte(&ee_fan_max_pwm, fan_max_pwm);
+					if (fan_pwm > fan_max_pwm) {
+						fan_pwm = set_fan_pwm(fan_max_pwm, 20);
+					}
 				}
 			} else if (strncmp(buf, "wdbg", 4) == 0) {
 				// Debug override
