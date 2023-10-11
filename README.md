@@ -13,9 +13,9 @@ NOTE: I made only one pcb and the first version had an error. The error is corre
 
 ### Warning:
 
-The output switch IRF9530 burned after a few months in use. Both IRF9530 were changed to IRF4905 which has much lower internal resistance and higher current rating. Zener diodes were also added in parallel of every fets 47k pullup resistor to limit tha gate voltage to about 13V (2x 6.2V zeners in series).
+The output switch IRF9530 burned after a few months in use. Both IRF9530 were changed to IRF4905 which has much lower internal resistance and higher current rating. Zener diodes were also added in parallel of every fets 47k pullup resistor to limit the gate voltage to about 13V (2x 6.2V zeners in series).
 
-Arduino LM340 voltage regulator is changed to a TSR 1-2540 dc converter because the original will run quite warm.
+Arduino LM340 voltage regulator is changed to a TSR 1-2540 dc converter because the original will run quite warm with 20V input.
 
 
 Probably still contains errors and bugs.
